@@ -1,0 +1,53 @@
+# Environment variables and credentials
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+google-services.json
+firebase-debug.log
+firebase-debug.*.log
+.runtimeconfig.json
+
+# Node & Web dependencies / builds
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.cache/
+
+# Firebase
+.firebase/
+.firebaserc
+
+# Python & AI tooling
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+*.tflite
+*.onnx
+
+# Android & Gradle
+.gradle/
+local.properties
+captures/
+*.apk
+*.aab
+*.ap_
+bin/
+gen/
+out/
+
+# Operating System & Editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.bak
