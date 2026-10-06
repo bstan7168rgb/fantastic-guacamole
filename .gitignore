@@ -51,3 +51,875 @@ Thumbs.db
 .idea/
 *.swp
 *.bak
+- name: Create GitHub App Token
+  uses: actions/create-github-app-token@v3.2.0name: Run tests on staging
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  hello-world:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - uses: ./actions/staging-tests
+        with:
+          token: ${{ steps.app-token.outputs.token }}buildSrc/src/main/kotlin/mcp.detekt.gradle.ktsnpx giget@latest gh:firebase/codelab-friendlychat-web/angularfire-start#master . --installmkdir codelab-friendlyeats-web
+
+cd codelab-friendlyeats-webecho "# effective-funicular" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/bstan7168rgb/effective-funicular.git
+git push -u origin maingit remote add origin https://github.com/bstan7168rgb/effective-funicular.git
+git branch -M main
+git push -u origin mainbasename $(git rev-parse --show-toplevel)import hashlib
+import re
+from datetime import datetime, timezone
+from typing import Dict, List, Literal, Optional
+from pydantic import BaseModel, Field
+
+
+class DocumentMetadata(BaseModel):
+    title: str
+    author: str
+    version: str
+    semantic_tags: List[str]
+    authority_level: Literal["canonical", "working_draft", "deprecated", "ephemeral"]
+    access_scope: Literal["internal_agent", "cross_developer", "public_runtime"]
+    estimated_tokens: int = 0
+
+
+class DocumentContent(BaseModel):
+    raw: str
+    sanitized_markdown: str = ""
+    ast_summary: str = ""
+    extracted_entities: List[str] = Field(default_factory=list)
+
+
+class PlatformProfiles(BaseModel):
+    mcp_resource: bool = True
+    gemini_context: bool = True
+    claude_projects: bool = True
+    local_agent_runtime: bool = True
+
+
+class CanonicalContextRecord(BaseModel):
+    context_id: str
+    source_id: str
+    origin_uri: str
+    mime_type: str
+    extracted_at: str
+    metadata: DocumentMetadata
+    content: DocumentContent
+    target_platform_profiles: PlatformProfiles
+
+
+class ContextFilterPipeline:
+    SECRET_PATTERNS = [
+        re.compile(r"sk-[a-zA-Z0-9_-]{24,64}"),
+        re.compile(r"ghp_[a-zA-Z0-9]{36}"),
+        re.compile(r"-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA )?PRIVATE KEY-----"),
+        re.compile(r"bearer\s+[a-zA-Z0-9\._-]{20,}", re.IGNORECASE),
+    ]
+
+    def __init__(self, max_token_budget: int = 4000):
+        self.max_token_budget = max_token_budget
+
+    def _estimate_tokens(self, text: str) -> int:
+        return max(1, len(text) // 4)
+
+    def filter_hygiene(self, text: str) -> str:
+        text = text.replace("\x00", "").replace("\r\n", "\n")
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def filter_redaction(self, text: str) -> str:
+        scrubbed = text
+        for pattern in self.SECRET_PATTERNS:
+            scrubbed = pattern.sub("[REDACTED_SECRET]", scrubbed)
+        return scrubbed
+
+    def filter_structural_budget(self, text: str, mime_type: str) -> str:
+        current_tokens = self._estimate_tokens(text)
+        if current_tokens <= self.max_token_budget:
+            return text
+
+        char_limit = self.max_token_budget * 4
+        truncated_body = text[:char_limit]
+
+        if mime_type in ["text/x-python", "text/x-typescript"]:
+            symbols = re.findall(r"(?:class|def|function|interface|type)\s+([a-zA-Z0-9_]+)", text)
+            symbol_index = "\n".join(f"- `{sym}`" for sym in symbols[:40])
+            return (
+                f"{truncated_body}\n\n"
+                f"<!-- Context truncated at token budget: {self.max_token_budget} -->\n"
+                f"### Detected Symbols\n{symbol_index}"
+            )
+
+        return f"{truncated_body}\n\n<!-- Truncated to fit platform token budget -->"
+
+    def process(
+        self,
+        raw_content: str,
+        origin_uri: str,
+        mime_type: str,
+        title: str,
+        author: str,
+        semantic_tags: List[str],
+        authority: Literal["canonical", "working_draft", "deprecated", "ephemeral"],
+        scope: Literal["internal_agent", "cross_developer", "public_runtime"]
+    ) -> CanonicalContextRecord:
+        clean_text = self.filter_hygiene(raw_content)
+        sanitized_text = self.filter_redaction(clean_text)
+        budgeted_text = self.filter_structural_budget(sanitized_text, mime_type)
+        
+        hasher = hashlib.sha256()
+        hasher.update(origin_uri.encode("utf-8"))
+        source_id = hasher.hexdigest()[:16]
+
+        uuid_seed = hashlib.md5(f"{origin_uri}:{datetime.now(timezone.utc).isoformat()}".encode("utf-8")).hexdigest()
+        context_id = f"{uuid_seed[:8]}-{uuid_seed[8:12]}-{uuid_seed[12:16]}-{uuid_seed[16:20]}-{uuid_seed[20:32]}"
+
+        metadata = DocumentMetadata(
+            title=title,
+            author=author,
+            version="1.0.0",
+            semantic_tags=semantic_tags,
+            authority_level=authority,
+            access_scope=scope,
+            estimated_tokens=self._estimate_tokens(budgeted_text)
+        )
+
+        content = DocumentContent(
+            raw=raw_content,
+            sanitized_markdown=budgeted_text,
+            ast_summary=f"Processed {len(budgeted_text)} chars from {origin_uri}",
+            extracted_entities=re.findall(r"\b[A-Z][a-zA-Z0-9_]{3,}\b", budgeted_text)[:15]
+        )
+
+        return CanonicalContextRecord(
+            context_id=context_id,
+            source_id=source_id,
+            origin_uri=origin_uri,
+            mime_type=mime_type,
+            extracted_at=datetime.now(timezone.utc).isoformat(),
+            metadata=metadata,
+            content=content,
+            target_platform_profiles=PlatformProfiles()
+        )
+
+    def export_for_mcp(self, record: CanonicalContextRecord) -> Dict[str, object]:
+        """Serializes record to Model Context Protocol Resource Read format."""
+        return {
+            "uri": f"context://workspace/{record.source_id}",
+            "name": record.metadata.title,
+            "mimeType": "text/markdown",
+            "text": f"# {record.metadata.title}\n"
+                    f"**Authority:** {record.metadata.authority_level} | **Source:** {record.origin_uri}\n\n"
+                    f"{record.content.sanitized_markdown}"
+        }
+
+    def export_for_gemini(self, record: CanonicalContextRecord) -> Dict[str, object]:
+        """Serializes record as an explicit system context dictionary block."""
+        return {
+            "role": "user",
+            "parts": [
+                {
+                    "text": f"Context Document: {record.metadata.title}\n"
+                            f"Tags: {', '.join(record.metadata.semantic_tags)}\n"
+                            f"Body:\n{record.content.sanitized_markdown}"
+                }
+            ]
+        }
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CrossPlatformContextPayload",
+  "type": "object",
+  "required": [
+    "context_id",
+    "source_id",
+    "origin_uri",
+    "mime_type",
+    "extracted_at",
+    "content",
+    "metadata",
+    "target_platform_profiles"
+  ],
+  "properties": {
+    "context_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "source_id": {
+      "type": "string",
+      "description": "Deterministic hash of original file URI or workspace asset identifier"
+    },
+    "origin_uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "mime_type": {
+      "type": "string",
+      "enum": [
+        "text/plain",
+        "text/markdown",
+        "text/x-python",
+        "text/x-typescript",
+        "application/json",
+        "application/pdf"
+      ]
+    },
+    "extracted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["semantic_tags", "authority_level", "access_scope", "estimated_tokens"],
+      "properties": {
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "version": { "type": "string" },
+        "semantic_tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "authority_level": {
+          "type": "string",
+          "enum": ["canonical", "working_draft", "deprecated", "ephemeral"]
+        },
+        "access_scope": {
+          "type": "string",
+          "enum": ["internal_agent", "cross_developer", "public_runtime"]
+        },
+        "estimated_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "required": ["raw", "sanitized_markdown", "ast_summary"],
+      "properties": {
+        "raw": { "type": "string" },
+        "sanitized_markdown": { "type": "string" },
+        "ast_summary": { "type": "string" },
+        "extracted_entities": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "target_platform_profiles": {
+      "type": "object",
+      "properties": {
+        "mcp_resource": { "type": "boolean", "default": true },
+        "gemini_context": { "type": "boolean", "default": true },
+        "claude_projects": { "type": "boolean", "default": true },
+        "local_agent_runtime": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}
+https://docs.cloud.google.com/support/docs/get-billing-support?visit_id=639266681364711170-4234328793&rd=1#whats_nextdocker run -dp 80:80 docker/getting-startedgradle init --type java-library --dsl kotlingradle help --task initgradle init --type java-librarygradle init \
+  --type java-application \
+  --dsl kotlin \
+  --test-framework junit-jupiter \
+  --package my.project \
+  --into ./my-project \
+  --project-name my-project  \
+  --no-split-project  \
+  --java-version 17<dependencies>
+    <dependency>
+        <groupId>log4j</groupId>
+        <artifactId>log4j</artifactId>
+        <version>1.2.12</version>
+    </dependency>
+</dependencies>.   (1)
+├── gradle
+│   └── wrapper (2)
+├── gradlew         (3)
+├── gradlew.bat     (3)
+└── ⋮// src/engine/stream.js - Beast TV WebRTC + Google Firebase Signaling Engine
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  addDoc, 
+  onSnapshot 
+} from 'firebase/firestore';
+
+class BeastTVStreamEngine {
+  constructor(firebaseConfig) {
+    this.app = initializeApp(firebaseConfig);
+    this.db = getFirestore(this.app);
+    this.peerConnection = null;
+    this.dataChannel = null;
+    this.remoteStream = new MediaStream();
+    this.iceConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+  }
+
+  async startBroadcast(sessionId, localStream, onDataMessage) {
+    this.peerConnection = new RTCPeerConnection(this.iceConfig);
+    localStream.getTracks().forEach((track) => this.peerConnection.addTrack(track, localStream));
+
+    this.dataChannel = this.peerConnection.createDataChannel('btv-controller', {
+      ordered: false,
+      maxRetransmits: 0
+    });
+    this.setupDataChannel(onDataMessage);
+
+    const sessionRef = doc(this.db, 'btv_sessions', sessionId);
+    const offerCandidates = collection(sessionRef, 'offerCandidates');
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) addDoc(offerCandidates, event.candidate.toJSON());
+    };
+
+    const offerDescription = await this.peerConnection.createOffer();
+    await this.peerConnection.setLocalDescription(offerDescription);
+    await setDoc(sessionRef, { offer: { sdp: offerDescription.sdp, type: offerDescription.type } });
+
+    onSnapshot(sessionRef, (snapshot) => {
+      const data = snapshot.data();
+      if (!this.peerConnection.currentRemoteDescription && data?.answer) {
+        this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    onSnapshot(collection(sessionRef, 'answerCandidates'), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          this.peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+        }
+      });
+    });
+  }
+
+  async joinStream(sessionId, onStreamReady, onDataMessage) {
+    this.peerConnection = new RTCPeerConnection(this.iceConfig);
+
+    this.peerConnection.ontrack = (event) => {
+      event.streams[0].getTracks().forEach((track) => this.remoteStream.addTrack(track));
+      onStreamReady(this.remoteStream);
+    };
+
+    this.peerConnection.ondatachannel = (event) => {
+      this.dataChannel = event.channel;
+      this.setupDataChannel(onDataMessage);
+    };
+
+    const sessionRef = doc(this.db, 'btv_sessions', sessionId);
+    const answerCandidates = collection(sessionRef, 'answerCandidates');
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) addDoc(answerCandidates, event.candidate.toJSON());
+    };
+
+    const sessionSnap = await getDoc(sessionRef);
+    const sessionData = sessionSnap.data();
+    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sessionData.offer));
+
+    const answerDescription = await this.peerConnection.createAnswer();
+    await this.peerConnection.setLocalDescription(answerDescription);
+    await setDoc(sessionRef, { answer: { sdp: answerDescription.sdp, type: answerDescription.type } }, { merge: true });
+
+    onSnapshot(collection(sessionRef, 'offerCandidates'), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          this.peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+        }
+      });
+    });
+  }
+
+  setupDataChannel(onMessageCallback) {
+    this.dataChannel.binaryType = 'arraybuffer';
+    this.dataChannel.onmessage = (event) => onMessageCallback?.(event.data);
+  }
+
+  sendInput(data) {
+    if (this.dataChannel?.readyState === 'open') {
+      this.dataChannel.send(data);
+    }
+  }
+}
+
+export default BeastTVStreamEngine;
+
+Save this file directly to src/engine/stream.js and inject your Firebase configuration object into the constructor to activate peer discovery.
+public class ProblemReportingPlugin implements Plugin<Project> {
+
+    public static final ProblemGroup PROBLEM_GROUP = ProblemGroup.create("sample-group", "Sample Group");
+
+    private final ProblemReporter problemReporter;
+
+    interface SomeData extends AdditionalData {
+        void setName(String name);
+        String getName();
+    }
+
+    @Inject
+    public ProblemReportingPlugin(Problems problems) { (1)
+        this.problemReporter = problems.getReporter(); (2)
+    }
+
+    public void apply(Project project) {
+        ProblemId problemId = ProblemId.create("adhoc-deprecation", "Plugin 'x' is deprecated", PROBLEM_GROUP);
+        this.problemReporter.report(problemId, builder -> builder (3)
+            .details("The plugin 'x' is deprecated since version 2.5")
+            .solution("Please use plugin 'y'")
+            .additionalData(SomeData.class, additionalData -> {
+                additionalData.setName("Some name"); (4)
+            })
+        );
+    }
+}// src/engine/stream.js - Beast TV WebRTC + Google Firebase Signaling Engine
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  addDoc, 
+  onSnapshot 
+} from 'firebase/firestore';
+
+class BeastTVStreamEngine {
+  constructor(firebaseConfig) {
+    this.app = initializeApp(firebaseConfig);
+    this.db = getFirestore(this.app);
+    this.peerConnection = null;
+    this.dataChannel = null;
+    this.remoteStream = new MediaStream();
+    this.iceConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+  }
+
+  async startBroadcast(sessionId, localStream, onDataMessage) {
+    this.peerConnection = new RTCPeerConnection(this.iceConfig);
+    localStream.getTracks().forEach((track) => this.peerConnection.addTrack(track, localStream));
+
+    this.dataChannel = this.peerConnection.createDataChannel('btv-controller', {
+      ordered: false,
+      maxRetransmits: 0
+    });
+    this.setupDataChannel(onDataMessage);
+
+    const sessionRef = doc(this.db, 'btv_sessions', sessionId);
+    const offerCandidates = collection(sessionRef, 'offerCandidates');
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) addDoc(offerCandidates, event.candidate.toJSON());
+    };
+
+    const offerDescription = await this.peerConnection.createOffer();
+    await this.peerConnection.setLocalDescription(offerDescription);
+    await setDoc(sessionRef, { offer: { sdp: offerDescription.sdp, type: offerDescription.type } });
+
+    onSnapshot(sessionRef, (snapshot) => {
+      const data = snapshot.data();
+      if (!this.peerConnection.currentRemoteDescription && data?.answer) {
+        this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    onSnapshot(collection(sessionRef, 'answerCandidates'), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          this.peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+        }
+      });
+    });
+  }
+
+  async joinStream(sessionId, onStreamReady, onDataMessage) {
+    this.peerConnection = new RTCPeerConnection(this.iceConfig);
+
+    this.peerConnection.ontrack = (event) => {
+      event.streams[0].getTracks().forEach((track) => this.remoteStream.addTrack(track));
+      onStreamReady(this.remoteStream);
+    };
+
+    this.peerConnection.ondatachannel = (event) => {
+      this.dataChannel = event.channel;
+      this.setupDataChannel(onDataMessage);
+    };
+
+    const sessionRef = doc(this.db, 'btv_sessions', sessionId);
+    const answerCandidates = collection(sessionRef, 'answerCandidates');
+
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) addDoc(answerCandidates, event.candidate.toJSON());
+    };
+
+    const sessionSnap = await getDoc(sessionRef);
+    const sessionData = sessionSnap.data();
+    await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sessionData.offer));
+
+    const answerDescription = await this.peerConnection.createAnswer();
+    await this.peerConnection.setLocalDescription(answerDescription);
+    await setDoc(sessionRef, { answer: { sdp: answerDescription.sdp, type: answerDescription.type } }, { merge: true });
+
+    onSnapshot(collection(sessionRef, 'offerCandidates'), (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          this.peerConnection.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+        }
+      });
+    });
+  }
+
+  setupDataChannel(onMessageCallback) {
+    this.dataChannel.binaryType = 'arraybuffer';
+    this.dataChannel.onmessage = (event) => onMessageCallback?.(event.data);
+  }
+
+  sendInput(data) {
+    if (this.dataChannel?.readyState === 'open') {
+      this.dataChannel.send(data);
+    }
+  }
+}
+
+export default BeastTVStreamEngine;
+package org.example
+
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.Plugin
+import org.gradle.api.Project
+import org.gradle.api.provider.Property
+import org.gradle.api.problems.*
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.TaskAction
+import javax.inject.Inject
+
+/**
+ * Simple demo plugin for the Gradle Problems API.
+ */
+abstract class HelloProblemsPlugin : Plugin<Project> {
+    override fun apply(project: Project) {
+        project.tasks.register("greet", GreetTask::class.java) {
+            group = "demo"
+            description = "Greets a recipient. Demonstrates Problems API."
+        }
+    }
+}
+
+/**
+ * Extra structured data to attach to problem reports.
+ * Tools like Build Scans or IDEs could show this.
+ */
+interface GreetProblemData : AdditionalData {
+    var configuredRecipient: String?
+}
+
+/**
+ * Custom task that uses the Gradle Problems API.
+ */
+abstract class GreetTask : DefaultTask() {
+
+    @get:Input
+    abstract val recipient: Property<String>
+
+    @get:Inject
+    abstract val problems: Problems
+
+    private val GROUP: ProblemGroup =
+        ProblemGroup.create("org.example.hello-problems", "Hello Problems")
+    private val WARN_ID: ProblemId =
+        ProblemId.create("missing-recipient", "Recipient not set", GROUP)
+    private val FAIL_ID: ProblemId =
+        ProblemId.create("forbidden-recipient", "Forbidden recipient 'fail'", GROUP)
+
+    @TaskAction
+    fun run() {
+        val reporter = problems.reporter
+        val name = recipient.orNull?.trim().orEmpty()
+
+        // Warning: missing recipient -> provide a helpful suggestion
+        if (name.isEmpty()) {
+            reporter.report(WARN_ID) {
+                details("No recipient configured")
+                severity(Severity.WARNING)
+                solution("""Set the recipient: tasks.greet { recipient = "World" }""")
+                documentedAt("https://gradle.org/hello-problems#recipient")
+                additionalData(GreetProblemData::class.java) {
+                    configuredRecipient = null
+                }
+            }
+        }
+
+        // Fatal: a specific value is disallowed to show throwing()
+        else if (name.equals("fail", ignoreCase = true)) {
+            throw reporter.throwing(GradleException("forbidden value"), FAIL_ID) {
+                details("Recipient 'fail' is not allowed")
+                severity(Severity.ERROR)
+                solution("""Choose another value, e.g. recipient = "World".""")
+                documentedAt("https://gradle.org/hello-problems#forbidden")
+                additionalData(GreetProblemData::class.java) {
+                    configuredRecipient = name
+                }
+            }
+        }
+
+        logger.lifecycle("Hello, $name!")
+    }
+}.github/workflows/build.ymlProblemId id = ProblemId.create("sample-error", "FailingTask execution problem", StandardPlugin.PROBLEM_GROUP);
+throw getProblems().getReporter().throwing((new RuntimeException("Message from runtime exception")), id, problemSpec -> {
+    problemSpec.contextualLabel("This happened because ProblemReporter.throwing() was called")
+        .details("This is a demonstration of how to add\ndetailed information to a build failure")
+        .documentedAt("https://example.com/docs")
+        .solution("Remove the Problems.throwing() method call from the task action");
+});https://github.com/modelcontextprotocol/kotlin-sdk.gitrepositories {
+    mavenCentral()
+}
+
+dependencies {
+    // See the badge above for the latest version
+    implementation("io.modelcontextprotocol:kotlin-sdk:$mcpVersion")
+}name: Publish to MCP Registry
+
+on:
+  push:
+    tags: ["v*"] # Triggers on version tags like v1.0.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      ### Publish underlying npm package:
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test --if-present
+
+      - name: Build package
+        run: npm run build --if-present
+
+      - name: Publish package to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      ### Publish MCP server:
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      # TODO: Replace `example.com` with your domain name
+      # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login dns --domain example.com --private-key ${{ secrets.MCP_PRIVATE_KEY }}
+
+      # Optional:
+      # - name: Set version in server.json
+      #   run: |
+      #     VERSION=${GITHUB_REF#refs/tags/v}
+      #     jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish{"servers":[{ ... "name":"io.github.my-username/weather" ... }]}name: Publish to MCP Registry
+
+on:
+  push:
+    tags: ["v*"] # Triggers on version tags like v1.0.0
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC authentication
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      ### Publish underlying npm package:
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test --if-present
+
+      - name: Build package
+        run: npm run build --if-present
+
+      - name: Publish package to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      ### Publish MCP server:
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      # Optional:
+      # - name: Set version in server.json
+      #   run: |
+      #     VERSION=${GITHUB_REF#refs/tags/v}
+      #     jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.my-username/weather",
+  "description": "An MCP server for weather information.",
+  "repository": {
+    "url": "https://github.com/my-username/mcp-weather-server",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@my-username/mcp-weather-server",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Your API key for the service",
+          "isRequired": true,
+          "format": "string",
+          "isSecret": true,
+          "name": "YOUR_API_KEY"
+        }
+      ]
+    }
+  ]
+}{
+   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+   "name": "io.github.my-username/weather",
+   "description": "An MCP server for weather information.",
+   "repository": {
+     "url": "https://github.com/my-username/mcp-weather-server",
+     "source": "github"
+   },
+-  "version": "1.0.0",
++  "version": "1.0.1",
+   "packages": [
+     {
+       "registryType": "npm",
+       "identifier": "@my-username/mcp-weather-server",
+-      "version": "1.0.0",
++      "version": "1.0.1",
+       "transport": {
+         "type": "stdio"
+-      },
+-      "environmentVariables": [
+-        {
+-          "description": "Your API key for the service",
+-          "isRequired": true,
+-          "format": "string",
+-          "isSecret": true,
+-          "name": "YOUR_API_KEY"
+-        }
+-      ]
++      }
+     }
+   ]
+ }{
+   "name": "@my-username/mcp-weather-server",
+   "version": "1.0.1",
++  "mcpName": "io.github.my-username/weather",
+   "main": "index.js","license": "ISC",
+-  "description": "",
++  "repository": {
++    "type": "git",
++    "url": "https://github.com/my-username/mcp-weather-server.git"
++  },
++  "description": "An MCP server for weather information.",
+   "devDependencies": {./setup.sh --teardown \
+  --project=my-project \
+  --ingesting-host=s4191.g1.betterstackdata.com \
+  --org-id=123456789sha512-eUSHHWz8hezgfIHv7uXLPxmZ2bddj+/SddGlA/HT293J8wlO8r1cFLHUrCS9SY9QxQtBoP+7ERrCC+nleo71BQ==sha512-QiubNmB0NPdWoDibsGZuWKAHjKqn4n5kW+i0ZS6693zBo/FJYoO+aWS51BiKNdYWT5UwnQbQGyQr67gBoyub/Q==sha512-Mu6rkHKgjlOHSMjDBcMC6up6SvRlexRkSOqugYhNchCb79MLmtvYcuwVvicsHo+1mtFjMBLjz6NPQkcaAI3aKQ==sha512-Mu6rkHKgjlOHSMjDBcMC6up6SvRlexRkSOqugYhNchCb79MLmtvYcuwVvicsHo+1mtFjMBLjz6NPQkcaAI3aKQ==sha512-8akAfF6MFxXD0HhKhdbUIamLGNfdmzEpobd3BqH4SedKwercEfJ+CpZWiZbHCj6fBfEZtKvNGuOngWU9ZCwAnQ==sha512-2wQ96zmQ8VZNpWyG2JPeFZlRHPEWkycO3o8kG7r/OYNmEpWA1kkt/Sw7UuNisONI7ChvGFXIBeO/DawWIH3MXQ==<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.profiling.min.js" integrity="sha512-2wQ96zmQ8VZNpWyG2JPeFZlRHPEWkycO3o8kG7r/OYNmEpWA1kkt/Sw7UuNisONI7ChvGFXIBeO/DawWIH3MXQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.profiling.js" integrity="sha512-8akAfF6MFxXD0HhKhdbUIamLGNfdmzEpobd3BqH4SedKwercEfJ+CpZWiZbHCj6fBfEZtKvNGuOngWU9ZCwAnQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.development.min.js" integrity="sha512-Mu6rkHKgjlOHSMjDBcMC6up6SvRlexRkSOqugYhNchCb79MLmtvYcuwVvicsHo+1mtFjMBLjz6NPQkcaAI3aKQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.development.js" integrity="sha512-QiubNmB0NPdWoDibsGZuWKAHjKqn4n5kW+i0ZS6693zBo/FJYoO+aWS51BiKNdYWT5UwnQbQGyQr67gBoyub/Q==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.development.min.js" integrity="sha512-Mu6rkHKgjlOHSMjDBcMC6up6SvRlexRkSOqugYhNchCb79MLmtvYcuwVvicsHo+1mtFjMBLjz6NPQkcaAI3aKQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-profiling.development.js" integrity="sha512-QiubNmB0NPdWoDibsGZuWKAHjKqn4n5kW+i0ZS6693zBo/FJYoO+aWS51BiKNdYWT5UwnQbQGyQr67gBoyub/Q==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-client.development.min.js" integrity="sha512-luFNrr08BSKzkZl35Nfunqu6bnniCNl/HWAm48WAzmz8IVrIt2PjXU/1pozvgP+loz6o49lLwFoHGdQSX/g3rg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-client.production.js" integrity="sha512-IBi5u9h1zQFYSoLKVtre1n/ATBgcN8RdnjuzqCAJoUFd/uTfIv7q7FwDNZ3pIJMn+u3UydZjM3ckBHLwl/2nOg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-client.development.min.js" integrity="sha512-luFNrr08BSKzkZl35Nfunqu6bnniCNl/HWAm48WAzmz8IVrIt2PjXU/1pozvgP+loz6o49lLwFoHGdQSX/g3rg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom.production.min.js<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/19.3.0/cjs/react-dom-client.development.js" integrity="sha512-oVGNZW/CWcoH8r0PEubObPBCbNTjWLw/wq7BPk3dnrNaZDBpIz+1aN5gTF/AL14kCqX7q1USt+2XdIcevi5LmA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>AGENT_URL="$CURRENCY_AGENT_URL" uv run python currency_agent/test_a2aclient.pyimages/architecture.pngMCP_SERVER_URL="$MCP_SERVER_URL" uv run python currency_mcp_server/test_server.py# 1. Deploy Travel Agent (with ADK Web UI) connected to Currency Agent
+gcloud run deploy travel-agent \
+  --source travel_agent \
+  --region $REGION \
+  --allow-unauthenticated \
+  --update-env-vars CURRENCY_AGENT_URL="$CURRENCY_AGENT_URL",GOOGLE_GENAI_USE_ENTERPRISE="true",GOOGLE_CLOUD_PROJECT="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="global"
+
+# 2. Capture its assigned Cloud Run URL
+TRAVEL_AGENT_URL=$(gcloud run services describe travel-agent --region $REGION --format='value(status.url)')
+echo "Travel Agent URL: $TRAVEL_AGENT_URL"uv run adk deploy cloud_run travel_agent \
+  --project $PROJECT_ID \
+  --region $REGION \
+  --with_ui \
+  --env CURRENCY_AGENT_URL="$CURRENCY_AGENT_URL"# 1. Deploy Currency Agent with the MCP Server URL
+gcloud run deploy currency-agent \
+  --source currency_agent \
+  --region $REGION \
+  --allow-unauthenticated \
+  --update-env-vars MCP_SERVER_URL="$MCP_SERVER_URL",GOOGLE_GENAI_USE_ENTERPRISE="true",GOOGLE_CLOUD_PROJECT="$PROJECT_ID",GOOGLE_CLOUD_LOCATION="global"
+
+# 2. Capture its assigned Cloud Run URL
+CURRENCY_AGENT_URL=$(gcloud run services describe currency-agent --region $REGION --format='value(status.url)')
+echo "Currency Agent URL: $CURRENCY_AGENT_URL"
+
+# 3. Update AGENT_URL so the agent advertises its public HTTPS endpoint in its Agent Card
+gcloud run services update currency-agent \
+  --region $REGION \
+  --update-env-vars AGENT_URL="$CURRENCY_AGENT_URL"gcloud services enable run.googleapis.com \
+                       cloudbuild.googleapis.com \
+                       artifactregistry.googleapis.com \
+                       aiplatform.googleapis.com# Deploy MCP server
+gcloud run deploy currency-mcp-server \
+  --source currency_mcp_server \
+  --region $REGION \
+  --allow-unauthenticated
+
+# Capture the deployed MCP server URL
+MCP_SERVER_URL=$(gcloud run services describe currency-mcp-server --region $REGION --format='value(status.url)')/mcp
+echo "MCP Server URL: $MCP_SERVER_URL"export PROJECT_ID=<YOUR_GOOGLE_CLOUD_PROJECT_ID>
+export REGION=us-central1
