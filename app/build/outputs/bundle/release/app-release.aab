@@ -1,0 +1,17 @@
+genxnext-android/
+├── build.gradle
+├── settings.gradle
+├── gradle.properties
+├── keystore/
+│   └── myProject_keyAndCertBundle_2.jks
+└── app/
+    ├── build.gradle
+    ├── proguard-rules.pro
+    └── src/
+        └── main/
+            ├── AndroidManifest.xml
+            └── res/
+                ├── values/
+                │   └── strings.xml
+                └── mipmap-hdpi/
+                    └── ic_launcher.png
